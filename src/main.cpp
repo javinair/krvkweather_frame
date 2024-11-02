@@ -7,6 +7,7 @@ Debugger debugger(IPAddress(192, 168, 0, 10), 12345);
 
 void setup() {
     Serial.begin(115200);
+    // (!) Rename wifi_config_template.h file to wifi_config.h and put your wifi credentials
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
     while (WiFi.status() != WL_CONNECTED) {
