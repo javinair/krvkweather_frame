@@ -5,8 +5,8 @@
 #include <esp_sleep.h>
 
 #define SHORT_PRESS_TIME 500
+#define LONG_PRESS_TIME 5000
 #define OTA_UPDATE_MS 1000
-#define DS_CHECK_MS 10000
 
 
 Debugger debugger(IPAddress(192, 168, 0, 10), 12345);
@@ -39,6 +39,11 @@ void otaConfiguration() {
 }
 
 void setup() {
+    /* BUTTON */
+    pinMode(GPIO_NUM_4, INPUT_PULLUP);
+    esp_sleep_enable_ext0_wakeup(GPIO_NUM_4, 0); // Habilita el wakeup en GPIO4 (0 = LOW)
+    btnPressedOnAwake = !digitalRead(GPIO_NUM_4);
+
     /* WIFI */
     Serial.begin(115200);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -49,12 +54,7 @@ void setup() {
     debugger.init();
 
     /* OTA */
-    otaConfiguration();    
-
-    /* BUTTON */
-    pinMode(GPIO_NUM_4, INPUT_PULLUP);
-    esp_sleep_enable_ext0_wakeup(GPIO_NUM_4, 0); // Habilita el wakeup en GPIO4 (0 = LOW)
-    btnPressedOnAwake = !digitalRead(GPIO_NUM_4);
+    otaConfiguration();        
 
     debugger.log("KRVKWeather Frame iniciado");
 }
@@ -65,6 +65,20 @@ void startDeepSleep(long timeInSeconds) {
     WiFi.disconnect(true);
     esp_sleep_enable_timer_wakeup(timeInSeconds * 1000000);
     esp_deep_sleep_start();
+}
+
+/* BUTTON */
+void handleShortPress() {
+    debugger.log("Pulsación corta");
+}
+
+void handleLongPress() {
+    if (btnPressedOnAwake) {
+        debugger.log("Despertado mediante botón");
+    } else {
+        startDeepSleep(60);
+    }
+    btnPressedOnAwake = false;    
 }
 
 void loop() {
@@ -80,27 +94,26 @@ void loop() {
 
     /* BUTTON */
     btnCurrentState = digitalRead(GPIO_NUM_4);
-    if (btnLastState == HIGH && btnCurrentState == LOW)       // button is pressed
+    if (btnLastState == HIGH && btnCurrentState == LOW) {
+        // Button pressed, record time
         btnPressedTime = millis();
-    else if (btnLastState == LOW && btnCurrentState == HIGH) { // button is released
+    } 
+    else if (btnLastState == LOW && btnCurrentState == HIGH) {
+        // Button released, calculate press duration
         btnReleasedTime = millis();
         long pressDuration = btnReleasedTime - btnPressedTime;
-        if ( pressDuration < SHORT_PRESS_TIME )
-            debugger.log("Pulsación corta");
-        else {
-            if(btnPressedOnAwake) {
-                debugger.log("Despertado mediante botón");
-                btnPressedOnAwake = false;
-            } else {
-                debugger.log("Pulsación larga estando activo");
-            }
-        }      
-    }
-    btnLastState = btnCurrentState;
 
-    // /* DEEP SLEEP */
-    // if (currentMillis - lastDSCheck >= DS_CHECK_MS) {
-    //     lastDSCheck = currentMillis;    
-    //     startDeepSleep(10);
-    // }
+        if (pressDuration < SHORT_PRESS_TIME) {
+            handleShortPress();
+        } 
+        else if (pressDuration > LONG_PRESS_TIME) {
+            handleLongPress();
+        } 
+        else {
+            debugger.log("Pulsación larga estando activo");
+        }
+    }
+
+    // Update last button state
+    btnLastState = btnCurrentState;
 }
