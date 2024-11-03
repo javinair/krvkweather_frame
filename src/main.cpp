@@ -1,8 +1,9 @@
-#include "wifi_config.h"
+#include "secrets.h"
 #include <WiFi.h>
 #include <ArduinoOTA.h>
 #include "Debugger.h"
 #include <esp_sleep.h>
+#include "MqttClient.h"
 
 #define SHORT_PRESS_TIME 500
 #define LONG_PRESS_TIME 5000
@@ -10,6 +11,16 @@
 
 
 Debugger debugger(IPAddress(192, 168, 0, 10), 12345);
+
+// Configuración de MQTT
+MqttClient mqttClient(MQTT_SERVER_IP, MQTT_SERVER_PORT, MQTT_TOPIC, debugger);
+
+// Función de callback para manejar mensajes entrantes
+void callback(char* topic, byte* payload, unsigned int length) {
+    payload[length] = '\0'; // Asegura que el payload es una cadena terminada en null
+    debugger.log(("Mensaje recibido en el topic: " + String(topic)).c_str());
+    debugger.log(("Contenido: " + String((char*)payload)).c_str());
+}
 
 int btnLastState = HIGH;
 int btnCurrentState;
@@ -57,6 +68,12 @@ void setup() {
     otaConfiguration();        
 
     debugger.log("KRVKWeather Frame iniciado");
+    pinMode(GPIO_NUM_2, OUTPUT);
+    digitalWrite(GPIO_NUM_2, HIGH);
+
+    // Configuración del cliente MQTT
+    mqttClient.setCallback(callback);
+    mqttClient.connectToBroker();    
 }
 
 void startDeepSleep(long timeInSeconds) {
@@ -82,6 +99,8 @@ void handleLongPress() {
 }
 
 void loop() {
+    mqttClient.loop();
+
     static unsigned long lastOTACheck = 0;
     static unsigned long lastDSCheck = 0;    
     unsigned long currentMillis = millis();
