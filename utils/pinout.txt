@@ -1,0 +1,8 @@
+    VIN     5V      5
+    GND     GND     6   SDA
+    3.3     3.3     7   CS
+    SCL     4       8
+    BUSY    3       9   BTN
+    RES     2       10
+    DC      1       20
+            0       21
