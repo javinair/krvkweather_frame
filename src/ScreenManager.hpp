@@ -96,7 +96,7 @@ public:
     }   
 
     void updateFullScreen(float tempExt, float humExt, float tempInt, float humInt, int batInt, int wifiInt, int batExt, int wifiExt, String avg_wind_direction, int avg_wind_speed, int gust_wind_speed, const char* timestamp,
-                            float battery_voltage, float battery_shunt_voltage, float battery_current, float battery_power, int maxTempExt, int minTempExt, int maxHumExt, int minHumExt, float rain_last_hour, float rain_today, int sun_current) {
+                            float battery_voltage, float battery_shunt_voltage, float battery_current, float battery_power, int maxTempExt, int minTempExt, int maxHumExt, int minHumExt, float rain_last_hour, float rain_today, int draughtDays, int sun_current) {
         display.setFullWindow();
         display.firstPage();  
         do
@@ -114,7 +114,7 @@ public:
             drawExternalTemp(tempExt, maxTempExt, minTempExt);
             drawExternalHum(humExt, maxHumExt, minHumExt);
             drawWind(avg_wind_direction, avg_wind_speed, gust_wind_speed);
-            drawRain(rain_last_hour, rain_today);
+            drawRain(rain_last_hour, rain_today, draughtDays);
             drawSunPower(sun_current);
             // drawDebugData(0, 200, "V: ", battery_voltage);
             // drawDebugData(0, 230, "VShunt: ", battery_shunt_voltage);
@@ -139,7 +139,29 @@ public:
         printMagnitud(texto, x_text, y_text, "mA");       
     }
 
-    void drawRain(float rain_last_hour, float rain_today) {
+    void drawRain(float rain_last_hour, float rain_today, int draughtDays) {
+        if(rain_today > 0.0) {
+            drawRainIcon(rain_last_hour, rain_today);
+        } else {
+            drawDraughtText(draughtDays);
+        }
+    }
+
+    void drawDraughtText(int draughtDays) {
+        int x = 50;
+        int y = 205;
+        int x_text = x - 25;
+        int y_text = y + 25;
+        display.setCursor(x, y);
+        display.setFont(&FreeSans18pt7b);
+        display.print(draughtDays);
+        display.setCursor(x_text, y_text);
+        display.setFont(&FreeSans9pt7b);        
+        display.print("Dias sequia");
+
+    }
+
+    void drawRainIcon(float rain_last_hour, float rain_today) {
         int x = 20;
         int y = 175;
         int height = 50;
@@ -176,6 +198,7 @@ public:
         x_text = x + width + 5;
         y_text = y + 44;
         display.setCursor(x_text, y_text);
+        debugger.log(String(rain_last_hour).c_str());
         if (rain_last_hour == (int)rain_last_hour) {
             texto = String((int)rain_last_hour);
         } else {

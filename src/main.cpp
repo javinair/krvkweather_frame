@@ -71,7 +71,7 @@ ScreenManager screen(display, debugger);
 WakeUpResetManager wakeUpResetManager(debugger);
 
 // Test
-char* jsonEjemplo = "{\"last_record\":{\"battery_level\":4.07,\"device_power\":0.0,\"humidity\":79.4,\"id\":3332,\"pressure\":1016.2,\"rain_last_hour\":4.53,\"rain_today\":8.0,\"solar_power\":340,\"temperature\":12.3,\"timestamp\":\"2025-02-08 19:22:23\",\"uv_index\":0.0,\"wind_direction\":\"north\",\"wind_gust\":2.0,\"wind_speed\":1.0},\"today_extremes\":{\"humidity\":{\"max\":100,\"min\":8.9},\"pressure\":{\"max\":1016.2,\"min\":1012.38},\"temperature\":{\"max\":20.6,\"min\":8.2},\"wind_speed\":{\"max\":14.0}}}";
+char* jsonEjemplo = "{\"extra_data\":{\"last_rain_days\":16},\"last_record\":{\"battery_level\":4.18,\"device_power\":0.0,\"humidity\":84.8,\"id\":4899,\"pressure\":1013.95,\"rain_last_hour\":3.2,\"rain_today\":0.0,\"solar_power\":0.0,\"temperature\":17.8,\"timestamp\":\"2025-02-19 17:10:04\",\"uv_index\":1.0,\"wind_direction\":\"west\",\"wind_gust\":16.0,\"wind_speed\":5.0},\"today_extremes\":{\"humidity\":{\"max\":100.0,\"min\":68.8},\"pressure\":{\"max\":1014.06,\"min\":1008.03},\"temperature\":{\"max\":19.1,\"min\":11.0},\"wind_speed\":{\"max\":18.0}}}";
 
 
 /****************************** Methods *******************************/
@@ -100,10 +100,9 @@ void updateBatteryDataList() {
     BATTERY_DATA bd = getInaData();
     batteryDataList[bdIndex] = bd;
     bdIndex = (bdIndex + 1) % BATTERY_DATA_SIZE;
-    if(bdIndex < BATTERY_DATA_SIZE) {
+    if(bdCount < BATTERY_DATA_SIZE) {
         bdCount++;
     }
-    debugger.log(String(bd.busVoltage).c_str());
 }
 
 String httpGETRequest(const char* serverName) {
@@ -192,7 +191,6 @@ FRAME_DATA getFrameData() {
     frameData.wifiStrength = WiFi.RSSI();
 
     BATTERY_DATA bd;
-    debugger.log(String(bdCount).c_str());
     if(bdCount > 0) {
         float avgVBus = 0.0f, avgVShunt = 0.0f, avgCurrent = 0.0f, avgPower = 0.0f;
         for(int i=0; i<bdCount; i++) {
@@ -258,6 +256,7 @@ void processData(const char* data) {
     int uv = doc["last_record"]["uv_index"]; // 0
     float rain_last_hour = doc["last_record"]["rain_last_hour"]; // 0
     float rain_today = doc["last_record"]["rain_today"]; // 0
+    int draughtDays = doc["extra_data"]["last_rain_days"]; // 0
     int wifi = doc["last_record"]["wifi"]; // -52
     int batPercentage = calculateSOC(doc["last_record"]["battery_level"]);
     const char* timestamp = doc["last_record"]["timestamp"]; // "north"    
@@ -273,7 +272,7 @@ void processData(const char* data) {
     screen.updateFullScreen(temp, hum, (int)fd.temperature, (int)fd.humidity, 
                             fd.batteryLevel, fd.wifiStrength, batPercentage, wifi,
                             String(avg_wind_direction), avg_wind_speed, gust_wind_speed, 
-                            timestamp, fd.bd.busVoltage, fd.bd.shuntVoltage, fd.bd.current, fd.bd.power, maxTempExt, minTempExt, maxHumExt, minHumExt, rain_last_hour, rain_today, solar_power);
+                            timestamp, fd.bd.busVoltage, fd.bd.shuntVoltage, fd.bd.current, fd.bd.power, maxTempExt, minTempExt, maxHumExt, minHumExt, rain_last_hour, rain_today, draughtDays, solar_power);
 }
 
 void otaConfiguration() {
@@ -389,6 +388,7 @@ void setup() {
 /* BUTTON */
 void handleShortPress() {
     debugger.log("Pulsación corta");
+    // processData(jsonEjemplo);
     getLastDataFromKRVKWeather();
 }
 
