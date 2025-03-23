@@ -4,6 +4,7 @@
 #include "FreeMonoBold42ptClock.h"
 #include "FreeSansBold42ptClock.h"
 #include "FreeSans10ptClock.h"
+#include "FreeSans10pt7b.h"
 #include <Fonts/FreeSans12pt7b.h>
 #include "FreeSansBold16ptClock.h"
 #include "Debugger.h"
@@ -27,6 +28,8 @@ public:
 
     void hibernate() {
         display.hibernate();
+        display.end();
+        display.powerOff();
     }
 
     void init() {
@@ -96,7 +99,7 @@ public:
     }   
 
     void updateFullScreen(float tempExt, float humExt, float tempInt, float humInt, int batInt, int wifiInt, int batExt, int wifiExt, String avg_wind_direction, int avg_wind_speed, int gust_wind_speed, const char* timestamp,
-                            float battery_voltage, float battery_shunt_voltage, float battery_current, float battery_power, int maxTempExt, int minTempExt, int maxHumExt, int minHumExt, float rain_last_hour, float rain_today, int draughtDays, int sun_current) {
+                            float battery_voltage, float battery_shunt_voltage, float battery_current, float battery_power, int maxTempExt, int minTempExt, int maxHumExt, int minHumExt, float rain_last_hour, float rain_today, int draughtDays, float solar_voltage) {
         display.setFullWindow();
         display.firstPage();  
         do
@@ -115,7 +118,7 @@ public:
             drawExternalHum(humExt, maxHumExt, minHumExt);
             drawWind(avg_wind_direction, avg_wind_speed, gust_wind_speed);
             drawRain(rain_last_hour, rain_today, draughtDays);
-            drawSunPower(sun_current);
+            drawSunVoltage(solar_voltage);
             // drawDebugData(0, 200, "V: ", battery_voltage);
             // drawDebugData(0, 230, "VShunt: ", battery_shunt_voltage);
             // drawDebugData(0, 260, "Int: ", battery_current);
@@ -124,19 +127,21 @@ public:
         while (display.nextPage()); 
     }
 
-    void drawSunPower(int sun_current) {
+    void drawSunVoltage(float solar_voltage) {
         int x = 15;
         int y = 240;
         int height = 40;
         int width = 40;
         int x_text = x + width + 5;
-        int y_text = y + 26;
-        String texto = String(sun_current); 
-        display.drawBitmap(x, y, epd_bitmap_sun_power, width, height, GxEPD_BLACK);
-        display.setCursor(x_text, y_text);
+        int percentage = (int)((solar_voltage/7)*100);
+        String texto = String(percentage)+"%"; 
+        int16_t tbx, tby; uint16_t tbw, tbh;
         display.setFont(&FreeSans12pt7b);
+        display.getTextBounds(texto, x, y, &tbx, &tby, &tbw, &tbh);          
+        display.drawBitmap(x, y, epd_bitmap_sun_power, width, height, GxEPD_BLACK);
+        display.setCursor(x_text, y+(height/2)+tbh/2);
         display.print(texto);
-        printMagnitud(texto, x_text, y_text, "mA");       
+        // printMagnitud(texto, x_text, y_text, "mA");       
     }
 
     void drawRain(float rain_last_hour, float rain_today, int draughtDays) {
@@ -148,17 +153,20 @@ public:
     }
 
     void drawDraughtText(int draughtDays) {
-        int x = 50;
-        int y = 205;
-        int x_text = x - 25;
-        int y_text = y + 25;
-        display.setCursor(x, y);
-        display.setFont(&FreeSans18pt7b);
-        display.print(draughtDays);
-        display.setCursor(x_text, y_text);
-        display.setFont(&FreeSans9pt7b);        
-        display.print("Dias sequia");
+        int x_center = 67;
+        int y_text = 205;        
+        drawCenteredText(String(draughtDays), x_center, y_text, &FreeSans18pt7b);
+        y_text += 25;
+        drawCenteredText("Dias sequia", x_center, y_text, &FreeSans9pt7b);
+    }
 
+    void drawCenteredText(const String& text, int x_center, int y_text, const GFXfont* font) {
+        int16_t tbx, tby; uint16_t tbw, tbh;
+        display.setFont(font);
+        display.getTextBounds(text, x_center, y_text, &tbx, &tby, &tbw, &tbh);
+        int x_number = x_center - tbw * 0.5;
+        display.setCursor(x_number, y_text);
+        display.print(text);
     }
 
     void drawRainIcon(float rain_last_hour, float rain_today) {
@@ -198,7 +206,6 @@ public:
         x_text = x + width + 5;
         y_text = y + 44;
         display.setCursor(x_text, y_text);
-        debugger.log(String(rain_last_hour).c_str());
         if (rain_last_hour == (int)rain_last_hour) {
             texto = String((int)rain_last_hour);
         } else {
@@ -229,7 +236,7 @@ public:
     }
 
     void windUpperText(String avg_wind_direction, int avg_wind_speed, int gust_wind_speed, int center_x, int center_y) {
-        display.setFont(&FreeSans10pt7b);
+        display.setFont(&FreeSans10ptClock);
         int16_t tbx, tby; uint16_t tbw, tbh;
         display.getTextBounds(String(gust_wind_speed).c_str(), center_x, center_y, &tbx, &tby, &tbw, &tbh);
         display.setCursor(center_x-tbw*0.5, center_y-10);
@@ -253,7 +260,7 @@ public:
     }
 
     void windLowerText(String avg_wind_direction, int avg_wind_speed, int gust_wind_speed, int center_x, int center_y) {
-        display.setFont(&FreeSans10pt7b);
+        display.setFont(&FreeSans10ptClock);
         int16_t tbx, tby; uint16_t tbw, tbh;
         display.getTextBounds(String(gust_wind_speed).c_str(), center_x, center_y, &tbx, &tby, &tbw, &tbh);
         display.setCursor(center_x-tbw*0.5, center_y+20);
@@ -379,13 +386,13 @@ public:
 
     void drawLastUpdate(const char* timestamp) {
         String horaMinutos = extractTime(timestamp);
-        display.setFont(&FreeSans9pt7b);
-        display.setTextColor(GxEPD_BLACK);
-        display.setCursor(100, 345);
-        display.print("Actualizado: ");
+        String texto = "Actualizado: "+horaMinutos;
         display.setFont(&FreeSans10pt7b);
-        display.setCursor(200, 345);
-        display.print(horaMinutos);
+        display.setTextColor(GxEPD_BLACK);
+        int16_t tbx, tby; uint16_t tbw, tbh;
+        display.getTextBounds(texto, 0, 0, &tbx, &tby, &tbw, &tbh);        
+        display.setCursor(display.width()*0.5-tbw*0.5, 345);
+        display.print(texto);
     }
 
     void drawDebugData(int x, int y, String texto, float valor) {

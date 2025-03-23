@@ -1,5 +1,5 @@
-#ifndef FreeSans10pt7b_H
-#define FreeSans10pt7b_H
+#ifndef FreeSans10ptClock_H
+#define FreeSans10ptClock_H
 
 #ifdef __AVR__
 #include <avr/io.h>
@@ -16,7 +16,7 @@
 #define PROGMEM
 #endif
 
-const uint8_t FreeSans10pt7bBitmaps[] PROGMEM = {
+const uint8_t FreeSans10ptClockBitmaps[] PROGMEM = {
   0x3E, 0x3F, 0x98, 0xDC, 0x7C, 0x1E, 0x0F, 0x07, 0x83, 0xC1, 0xE0, 0xF8,
   0xEC, 0x67, 0xF1, 0xF0, 0x13, 0xFF, 0x33, 0x33, 0x33, 0x33, 0x33, 0x3E,
   0x3F, 0xB8, 0xF8, 0x30, 0x18, 0x0C, 0x0C, 0x1C, 0x1C, 0x18, 0x18, 0x18,
@@ -31,7 +31,7 @@ const uint8_t FreeSans10pt7bBitmaps[] PROGMEM = {
   0xE0, 0x3E, 0x3F, 0xB8, 0xD8, 0x3C, 0x1E, 0x0F, 0x8E, 0xFF, 0x3D, 0x80,
   0xC0, 0xDC, 0x67, 0xE1, 0xE0, 0xF0, 0x00, 0x3C };
 
-const GFXglyph FreeSans10pt7bGlyphs[] PROGMEM = {
+const GFXglyph FreeSans10ptClockGlyphs[] PROGMEM = {
   {     0,   9,  14,  11,    1,  -13 },   // 0x30 '0'
   {    16,   4,  14,  11,    3,  -13 },   // 0x31 '1'
   {    23,   9,  14,  11,    1,  -13 },   // 0x32 '2'
@@ -44,11 +44,11 @@ const GFXglyph FreeSans10pt7bGlyphs[] PROGMEM = {
   {   133,   9,  14,  11,    1,  -13 },   // 0x39 '9'
   {   149,   2,  11,   5,    2,  -10 } }; // 0x3A ':'
 
-const GFXfont FreeSans10pt7b PROGMEM = {
-  (uint8_t  *)FreeSans10pt7bBitmaps,
-  (GFXglyph *)FreeSans10pt7bGlyphs,
+const GFXfont FreeSans10ptClock PROGMEM = {
+  (uint8_t  *)FreeSans10ptClockBitmaps,
+  (GFXglyph *)FreeSans10ptClockGlyphs,
   0x30, 0x3A, 24 };
 
 // Approx. 236 bytes
 
-#endif // FreeSans10pt7b_H
+#endif // FreeSans10ptClock_H

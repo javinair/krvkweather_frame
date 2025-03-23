@@ -5,6 +5,11 @@
 
 #define NUM_LEDS 1  // Number of leds in the strip
 #define LED_INTENSITY 50
+#define LED_RED strip.Color(255, 0, 0)
+#define LED_WHITE strip.Color(255, 255, 255)
+#define LED_GREEN strip.Color(0, 255, 0)
+#define LED_BLUE strip.Color(0, 0, 255)
+#define LED_ORANGE strip.Color(250, 140, 0)
 
 class StatusLED {
 private:
@@ -36,23 +41,27 @@ public:
     }
 
     uint32_t getLEDOnColor() {
-        return strip.Color(255, 255, 255);
+        return LED_WHITE;
     }
 
     uint32_t getLEDOnChargingColor() {
-        return strip.Color(250, 140, 0);
+        return LED_ORANGE;
     }
 
     uint32_t getLEDChargingColor() {
-        return strip.Color(255, 0, 0);
+        return LED_ORANGE;
     }
 
     uint32_t getLEDChargedColor() {
-        return strip.Color(0, 255, 0);
+        return LED_GREEN;
     }
 
     uint32_t getLEDOnChargedColor() {
-        return strip.Color(26, 149, 49);
+        return LED_BLUE;
+    }
+
+    uint32_t getLEDLowBatteryColor() {
+        return LED_RED;
     }
 };
 

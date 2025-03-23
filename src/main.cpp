@@ -20,16 +20,27 @@
 #include "DataStructures.hpp"
 #include "StatusLED.hpp"
 #include "WakeUpResetReasons.hpp"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include "SPIFFS.h"
+
+/************** DeepSleep **************/
+#define NORMAL_SLEEP_TIME_IN_MINUTES 10       // 10 min
+#define EXTENDED_SLEEP_TIME_IN_MINUTES 1    // 30 min si batería baja
+#define MAX_SLEEP_TIME_IN_MINUTES 2         // 2 horas si batería críticamente baja
+#define MAX_LOW_BATTERY_ATTEMPTS 3  // Después de 3 intentos, extender aún más
 
 /************** Internal battery SoC **************/
-#define BATTERY_DATA_SIZE 20
-BATTERY_DATA batteryDataList[BATTERY_DATA_SIZE];
-float V_max = 4.2;  // 100%
-float V_min = 3.2;  // 0%
-float k = 2.0;      // Constant
+#define BATTERY_FULL_VOLTAGE 4.2    // 100%
+#define BATTERY_LOW_VOLTAGE 3.7     // 0%
+#define BATTERY_CRITICAL_VOLTAGE 3.4
+#define BATTERY_BUFFER_SIZE 20
+BATTERY_DATA batteryDataList[BATTERY_BUFFER_SIZE];
+const float k = 4.0;      // Constant
 Ticker batteryTicker;   // Ticker to update battery data
 int bdIndex = 0;
 int bdCount = 0;
+RTC_DATA_ATTR int lowBatteryAttempts = 0;  // Variable que persiste en deep sleep
 
 /************** Status LED **************/
 #define LED_PIN 10
@@ -47,12 +58,12 @@ int btnLastState = HIGH;
 int btnCurrentState;
 unsigned long btnPressedTime  = 0;
 unsigned long btnReleasedTime = 0;
-boolean btnPressedOnAwake = false;
 
 /************** NTP **************/
 const char* ntpServer = "pool.ntp.org";
 const long gmtOffset_sec = 3600; // GMT Madrid offset (GMT+1)
 const int daylightOffset_sec = 3600; // Summer time offset (1 hora)
+int secondsToWakeUp = 0;
 
 /************** Sensors **************/
 #define BME280_ADDRESS 0x76 
@@ -70,21 +81,29 @@ ScreenManager screen(display, debugger);
 /************** WakeUpResetReasons **************/
 WakeUpResetManager wakeUpResetManager(debugger);
 
-// Test
-char* jsonEjemplo = "{\"extra_data\":{\"last_rain_days\":16},\"last_record\":{\"battery_level\":4.18,\"device_power\":0.0,\"humidity\":84.8,\"id\":4899,\"pressure\":1013.95,\"rain_last_hour\":3.2,\"rain_today\":0.0,\"solar_power\":0.0,\"temperature\":17.8,\"timestamp\":\"2025-02-19 17:10:04\",\"uv_index\":1.0,\"wind_direction\":\"west\",\"wind_gust\":16.0,\"wind_speed\":5.0},\"today_extremes\":{\"humidity\":{\"max\":100.0,\"min\":68.8},\"pressure\":{\"max\":1014.06,\"min\":1008.03},\"temperature\":{\"max\":19.1,\"min\":11.0},\"wind_speed\":{\"max\":18.0}}}";
-
-
 /****************************** Methods *******************************/
+void calculateBatteryStatus();
 void processData(const char* data);
-FRAME_DATA getFrameData();
+FRAME_DATA getFrameData(bool initialRead = false);
 BATTERY_DATA getInaData();
-int calculateNextWakeup(int timeInMinutes);
-void getLastDataFromKRVKWeather();
+int calculateNextWakeup(int timeInMinutes = NORMAL_SLEEP_TIME_IN_MINUTES);
+void getLastDataFromKRVKWeather(FRAME_DATA fd);
 int calculateSOC(float voltage);
 void updateBatteryDataList();
 bool isBatteryCharging();
 bool isBatteryCharged();
+void syncTimeAndCalculateWakeup(void* parameter);
+void processExampleData();
+BATTERY_DATA getBatteryData();
 
+void calculateBatteryStatus() {
+
+}
+
+bool isLowBattery() {
+    BATTERY_DATA bd = getInaData();
+    return bd.busVoltage <= 3.5;
+}
 
 bool isBatteryCharging() {
     BATTERY_DATA bd = getInaData();    
@@ -93,14 +112,15 @@ bool isBatteryCharging() {
 
 bool isBatteryCharged() {
     BATTERY_DATA bd = getInaData();
-    return bd.shuntVoltage <= -7.0 && bd.current >= -80.0 && bd.power <= 320.0;
+    return bd.shuntVoltage >= -7.0 && bd.current >= -50.0 && bd.power <= 220.0;
 }
 
 void updateBatteryDataList() {
     BATTERY_DATA bd = getInaData();
+    // debugger.log(String(bd.busVoltage).c_str());
     batteryDataList[bdIndex] = bd;
-    bdIndex = (bdIndex + 1) % BATTERY_DATA_SIZE;
-    if(bdCount < BATTERY_DATA_SIZE) {
+    bdIndex = (bdIndex + 1) % BATTERY_BUFFER_SIZE;
+    if(bdCount < BATTERY_BUFFER_SIZE) {
         bdCount++;
     }
 }
@@ -117,21 +137,19 @@ String httpGETRequest(const char* serverName) {
     String payload = "{}"; 
     
     if (httpResponseCode>0) {
-      Serial.print("HTTP Response code: ");
-      Serial.println(httpResponseCode);
       payload = http.getString();
-    }
-    else {
-      Serial.print("Error code: ");
-      Serial.println(httpResponseCode);
     }
     // Free resources
     http.end();
   
     return payload;
-  }
+}
 
-void getLastDataFromKRVKWeather() {
+
+void getLastDataFromKRVKWeather(FRAME_DATA fd) {
+
+    char url[100];
+    snprintf(url, sizeof(url), "http://%s:%d/get_frame_data", KRVKWEAHTER_IP, KRVKWEAHTER_PORT);
     const int maxRetries = 5;
     const int retryInterval = 2000; // 2 segundos
     int attempt = 0;
@@ -140,7 +158,8 @@ void getLastDataFromKRVKWeather() {
     while (attempt < maxRetries && !success) {
         if (WiFi.status() == WL_CONNECTED) {
             HTTPClient http;
-            http.begin("http://192.168.0.88:5050/get_frame_data");
+
+            http.begin(url);
 
             int httpResponseCode = http.GET();
 
@@ -153,8 +172,8 @@ void getLastDataFromKRVKWeather() {
                         payload += c;
                     }
                 }
-                debugger.log("Respuesta recibida:");
-                debugger.log(payload.c_str());
+                debugger.log("MQTT recibido");
+                // debugger.log(payload.c_str());
 
                 // Procesar la respuesta JSON
                 processData(payload.c_str());
@@ -183,13 +202,7 @@ void getLastDataFromKRVKWeather() {
     }
 }
 
-
-FRAME_DATA getFrameData() {
-    FRAME_DATA frameData;
-    frameData.temperature = bme.readTemperature();
-    frameData.humidity = bme.readHumidity();
-    frameData.wifiStrength = WiFi.RSSI();
-
+BATTERY_DATA getBatteryData() {
     BATTERY_DATA bd;
     if(bdCount > 0) {
         float avgVBus = 0.0f, avgVShunt = 0.0f, avgCurrent = 0.0f, avgPower = 0.0f;
@@ -212,6 +225,20 @@ FRAME_DATA getFrameData() {
     else {
         bd = getInaData();
     }
+
+    return bd;
+}
+
+FRAME_DATA getFrameData(bool initialRead) {
+    FRAME_DATA frameData;
+    frameData.temperature = bme.readTemperature();
+    frameData.humidity = bme.readHumidity();
+    if(initialRead) 
+        frameData.wifiStrength = 0;
+    else
+        frameData.wifiStrength = WiFi.RSSI();
+
+    BATTERY_DATA bd = getInaData();
     
     String inaData = String(bd.busVoltage)+";"+String(bd.shuntVoltage)+";"+String(bd.current)+";"+String(bd.power);
     debugger.log(String(inaData).c_str());
@@ -231,15 +258,15 @@ BATTERY_DATA getInaData() {
 }
 
 int calculateSOC(float V) {
-    if (V <= V_min) return 0.0;
-    if (V >= V_max) return 100.0;
+    if (V <= BATTERY_CRITICAL_VOLTAGE) return 0.0;
+    if (V >= BATTERY_FULL_VOLTAGE) return 100.0;
 
     float k = 4.0;  // Ajuste basado en la curva de descarga
-    return (int)(100.0 * (1 - exp(-k * (V - V_min) / (V_max - V_min))));
+    return (int)(100.0 * (1 - exp(-k * (V - BATTERY_CRITICAL_VOLTAGE) / (BATTERY_FULL_VOLTAGE - BATTERY_CRITICAL_VOLTAGE))));
 }
 
 void processData(const char* data) {
-    JsonDocument doc;
+    JsonDocument doc; 
     DeserializationError error = deserializeJson(doc, data);
     if (error) {
         debugger.log("deserializeJson() failed: ");
@@ -247,6 +274,7 @@ void processData(const char* data) {
         return;
     }
 
+    FRAME_DATA fd = getFrameData();
     float temp = doc["last_record"]["temperature"]; // 20.1
     float hum = doc["last_record"]["humidity"]; // 55.3
     float press = doc["last_record"]["pressure"]; // 1005.58
@@ -256,23 +284,20 @@ void processData(const char* data) {
     int uv = doc["last_record"]["uv_index"]; // 0
     float rain_last_hour = doc["last_record"]["rain_last_hour"]; // 0
     float rain_today = doc["last_record"]["rain_today"]; // 0
-    int draughtDays = doc["extra_data"]["last_rain_days"]; // 0
     int wifi = doc["last_record"]["wifi"]; // -52
     int batPercentage = calculateSOC(doc["last_record"]["battery_level"]);
     const char* timestamp = doc["last_record"]["timestamp"]; // "north"    
+    float solar_voltage = doc["last_record"]["solar_voltage"]; // 0    
     int maxTempExt = doc["today_extremes"]["temperature"]["max"]; // 20.6
     int minTempExt = doc["today_extremes"]["temperature"]["min"]; // 8.2
     int maxHumExt = doc["today_extremes"]["humidity"]["max"]; // 97.5
     int minHumExt = doc["today_extremes"]["humidity"]["min"]; // 38.9
-    int solar_power = doc["last_record"]["solar_power"]; // 0
-
-    batteryTicker.detach();
-    FRAME_DATA fd = getFrameData();
+    int draughtDays = doc["extra_data"]["last_rain_days"]; // 0    
 
     screen.updateFullScreen(temp, hum, (int)fd.temperature, (int)fd.humidity, 
                             fd.batteryLevel, fd.wifiStrength, batPercentage, wifi,
                             String(avg_wind_direction), avg_wind_speed, gust_wind_speed, 
-                            timestamp, fd.bd.busVoltage, fd.bd.shuntVoltage, fd.bd.current, fd.bd.power, maxTempExt, minTempExt, maxHumExt, minHumExt, rain_last_hour, rain_today, draughtDays, solar_power);
+                            timestamp, fd.bd.busVoltage, fd.bd.shuntVoltage, fd.bd.current, fd.bd.power, maxTempExt, minTempExt, maxHumExt, minHumExt, rain_last_hour, rain_today, draughtDays, solar_voltage);
 }
 
 void otaConfiguration() {
@@ -284,9 +309,9 @@ void otaConfiguration() {
         debugger.log("Actualización OTA completada.");
     });
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-        char buffer[50];
-        snprintf(buffer, sizeof(buffer), "Progreso OTA: %u%%", (progress * 100) / total);
-        debugger.log(buffer);
+        // char buffer[50];
+        // snprintf(buffer, sizeof(buffer), "Progreso OTA: %u%%", (progress * 100) / total);
+        // debugger.log(buffer);
     });
     ArduinoOTA.onError([](ota_error_t error) {
         char buffer[50];
@@ -294,32 +319,43 @@ void otaConfiguration() {
         debugger.log(buffer);
     });
     ArduinoOTA.begin();
-    debugger.log("Disponible para OTA");
+    // debugger.log("Disponible para OTA");
 }
 
-void startDeepSleep(long timeInSeconds) {
-    screen.hibernate();    
-    debugger.log("Entrando en modo deep sleep...");
-    delay(100);
-    WiFi.disconnect(true);
+void startDeepSleep(bool lowBatteryDeepSleep = false) {
+    debugger.log("Entrando en modo deep sleep...");   
+    if(!lowBatteryDeepSleep) { 
+        WiFi.disconnect(true);    
+        screen.hibernate();    
+        delay(200);
 
-    if(isBatteryCharging()) {
-        if(isBatteryCharged())
-            statusLED.setLEDColor(statusLED.getLEDChargedColor());
-        else
-            statusLED.setLEDColor(statusLED.getLEDChargingColor());
+        if(isBatteryCharging()) {
+            if(isBatteryCharged())
+                statusLED.setLEDColor(statusLED.getLEDChargedColor());
+            else
+                statusLED.setLEDColor(statusLED.getLEDChargingColor());
+        } 
+        else {
+            if(isLowBattery())
+                statusLED.setLEDColor(statusLED.getLEDLowBatteryColor());
+            else
+                statusLED.setLEDOff();
+        }
     }
-    else
-        statusLED.setLEDOff();
         
-    wakeUpResetManager.enableTimerWakeUp(timeInSeconds);
-    
+    wakeUpResetManager.enableTimerWakeUp(secondsToWakeUp);
     esp_deep_sleep_start();
 }
 
 void setup() {
+    bool lowBattery = false;
     /* ESP32-C3 Configuration */
     esp_task_wdt_init(10, true); // Timeout de 10 segundos para evitar que se quede colgado
+
+    /* BUTTON */
+    pinMode(GPIO_BUTTON, INPUT_PULLUP);
+    /* DEEP SLEEP */
+    esp_deep_sleep_enable_gpio_wakeup(BIT(GPIO_BUTTON), ESP_GPIO_WAKEUP_GPIO_LOW);            
 
     /* SENSORS */
     if (!bme.begin(BME280_ADDRESS)) {
@@ -327,34 +363,69 @@ void setup() {
         while (1); // Detiene el programa si no se encuentra el sensor
     }
     if (!INA0.begin()) {
-         debugger.log("¡Error al inicializar el INA226! Verifica las conexiones.");
+            debugger.log("¡Error al inicializar el INA226! Verifica las conexiones.");
         while (1); // Detiene el programa si no se encuentra el sensor
     }    
     INA0.setMaxCurrentShunt(0.2, 0.1, true);
-    INA0.setAverage(INA226_16_SAMPLES);   
+    // INA0.setAverage(INA226_16_SAMPLES);  
 
-    /* BUTTON */
-    pinMode(GPIO_BUTTON, INPUT_PULLUP);
-    btnPressedOnAwake = digitalRead(GPIO_BUTTON);
+
+    // uint32_t brown_reg_temp = 
+    // READ_PERI_REG(RTC_CNTL_BROWN_OUT_REG); //save WatchDog register
+    // WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detector    
+
+    memset(batteryDataList, 0, sizeof(batteryDataList));   
+    bdIndex = 0;
+    bdCount = 0;
+    batteryTicker.attach(0.2, updateBatteryDataList);    
+    delay(1000);    
+    batteryTicker.detach();
+    BATTERY_DATA bd = getBatteryData();
+    // FRAME_DATA fd = getFrameData(true);    
+    if(bd.shuntVoltage <= 0.0) {
+        statusLED.setLEDColor(statusLED.getLEDOnColor());    
+    }
+    else {
+        if(bd.busVoltage <= BATTERY_LOW_VOLTAGE) {
+            lowBatteryAttempts++;
+            int sleepTime = NORMAL_SLEEP_TIME_IN_MINUTES; // Default a 10 min
+            if (lowBatteryAttempts >= MAX_LOW_BATTERY_ATTEMPTS) {
+                sleepTime = MAX_SLEEP_TIME_IN_MINUTES; // Prolongamos más el deep sleep
+            } else {
+                sleepTime = EXTENDED_SLEEP_TIME_IN_MINUTES; // Espera más tiempo
+            }   
+            statusLED.setLEDColor(statusLED.getLEDLowBatteryColor());    
+            secondsToWakeUp = sleepTime * 60;
+            wakeUpResetManager.enableTimerWakeUp(secondsToWakeUp);
+            esp_deep_sleep_start();
+        }
+        else {
+            lowBatteryAttempts = 0;
+            statusLED.setLEDColor(statusLED.getLEDOnColor());    
+        }
+    }
 
     /* WIFI */
-    uint32_t brown_reg_temp = 
-    READ_PERI_REG(RTC_CNTL_BROWN_OUT_REG); //save WatchDog register
-    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detector
     WiFi.mode(WIFI_MODE_STA); // turn on WiFi
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     while (WiFi.status() != WL_CONNECTED) {
         delay(1000);
     }
-    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, brown_reg_temp); //enable brownout detector    
+    WiFi.setTxPower(WIFI_POWER_2dBm);   
 
     /* DEBUG */
     debugger.init();
 
-    memset(batteryDataList, 0, sizeof(batteryDataList));   
-    bdIndex = 0;
-    bdCount = 0;
-    batteryTicker.attach(0.3, updateBatteryDataList);    
+
+
+    xTaskCreate(syncTimeAndCalculateWakeup, "SyncTimeTask", 4096, NULL, 1, NULL);    
+
+    /* FileSystem */
+    if(!SPIFFS.begin(true)) {
+        debugger.log("Error al montar SPIFFS");
+        return;
+    }
+        
 
     /* OTA */
     otaConfiguration();        
@@ -362,39 +433,51 @@ void setup() {
     /* EINK */
     screen.init();
 
-    /* DEEP SLEEP */
-    esp_deep_sleep_enable_gpio_wakeup(BIT(GPIO_BUTTON), ESP_GPIO_WAKEUP_GPIO_LOW);        
+
+    // WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, brown_reg_temp); //enable brownout detector    
 
     /* INITIAL LOG */
     wakeUpResetManager.logResetReason();
     wakeUpResetManager.printWakeupReason(resetByButton);
     debugger.log("KRVKWeather Frame iniciado");
+    debugger.log(String(lowBatteryAttempts).c_str());    
 
-    if(isBatteryCharging()) {
-        if(isBatteryCharged())
-        statusLED.setLEDColor(statusLED.getLEDOnChargedColor());
-        else
-        statusLED.setLEDColor(statusLED.getLEDOnChargingColor());
-    }
-    else
-        statusLED.setLEDColor(statusLED.getLEDOnColor());
-
-    getLastDataFromKRVKWeather();        
+    delay(100);
+    FRAME_DATA fd = getFrameData();    
+    getLastDataFromKRVKWeather(fd);   
     if(!resetByButton)
-        startDeepSleep(calculateNextWakeup(10));
+        startDeepSleep();
 }
 
+
+void processExampleData() {
+    File file = SPIFFS.open("/example.json", "r");
+    if (!file) {
+        debugger.log("⚠️ Error abriendo el archivo");
+        return;
+    }
+
+    String jsonStr = file.readString();
+    file.close();
+    FRAME_DATA fd = getFrameData();
+    processData(jsonStr.c_str());
+}
 
 /* BUTTON */
 void handleShortPress() {
     debugger.log("Pulsación corta");
-    // processData(jsonEjemplo);
-    getLastDataFromKRVKWeather();
+    processExampleData();
+    // getLastDataFromKRVKWeather();
 }
 
 void handleLongPress() {
     debugger.log("Pulsación larga");
-    startDeepSleep(calculateNextWakeup(10));    
+    startDeepSleep();    
+}
+
+void syncTimeAndCalculateWakeup(void* parameter) {
+    secondsToWakeUp = calculateNextWakeup();
+    vTaskDelete(NULL); // Eliminar la tarea una vez completada
 }
 
 int calculateNextWakeup(int timeInMinutes) {
@@ -443,8 +526,10 @@ int calculateNextWakeup(int timeInMinutes) {
     // Muestra ambos timestamps y ambas horas en formato hh:mm:ss
     char currentTimeStr[20];
     strftime(currentTimeStr, sizeof(currentTimeStr), "%H:%M:%S", &currentTime);
+    debugger.log(currentTimeStr);
     char nextTimeStr[20];
     strftime(nextTimeStr, sizeof(nextTimeStr), "%H:%M:%S", &nextTime);
+    debugger.log(nextTimeStr);    
     return differenceInSeconds;
 }
 
