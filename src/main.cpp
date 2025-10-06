@@ -25,18 +25,19 @@
 #include "SPIFFS.h"
 
 /************** DeepSleep **************/
-#define NORMAL_SLEEP_TIME_IN_MINUTES 10       // 10 min
-#define EXTENDED_SLEEP_TIME_IN_MINUTES 1    // 30 min si batería baja
-#define MAX_SLEEP_TIME_IN_MINUTES 2         // 2 horas si batería críticamente baja
+#define NORMAL_SLEEP_TIME_IN_MINUTES 2       // 10 min
+#define EXTENDED_SLEEP_TIME_IN_MINUTES 5    // 30 min si batería baja
+#define MAX_SLEEP_TIME_IN_MINUTES 10         // 2 horas si batería críticamente baja
 #define MAX_LOW_BATTERY_ATTEMPTS 3  // Después de 3 intentos, extender aún más
 
 /************** Internal battery SoC **************/
 #define BATTERY_FULL_VOLTAGE 4.2    // 100%
-#define BATTERY_LOW_VOLTAGE 3.7     // 0%
-#define BATTERY_CRITICAL_VOLTAGE 3.4
+#define BATTERY_LOW_VOLTAGE 3.5     // 0%
+#define BATTERY_CRITICAL_VOLTAGE 3.2
 #define BATTERY_BUFFER_SIZE 20
 BATTERY_DATA batteryDataList[BATTERY_BUFFER_SIZE];
-const float k = 4.0;      // Constant
+BATTERY_DATA bd;
+const float k = 3.0;      // Constant
 Ticker batteryTicker;   // Ticker to update battery data
 int bdIndex = 0;
 int bdCount = 0;
@@ -83,40 +84,40 @@ WakeUpResetManager wakeUpResetManager(debugger);
 
 /****************************** Methods *******************************/
 void calculateBatteryStatus();
-void processData(const char* data);
+void processData(const char* data, FRAME_DATA fd);
 FRAME_DATA getFrameData(bool initialRead = false);
 BATTERY_DATA getInaData();
 int calculateNextWakeup(int timeInMinutes = NORMAL_SLEEP_TIME_IN_MINUTES);
 void getLastDataFromKRVKWeather(FRAME_DATA fd);
 int calculateSOC(float voltage);
 void updateBatteryDataList();
+bool isLowBattery();
 bool isBatteryCharging();
 bool isBatteryCharged();
 void syncTimeAndCalculateWakeup(void* parameter);
 void processExampleData();
-BATTERY_DATA getBatteryData();
+void calculateBatteryData();
 
 void calculateBatteryStatus() {
 
 }
 
 bool isLowBattery() {
-    BATTERY_DATA bd = getInaData();
-    return bd.busVoltage <= 3.5;
+    return bd.busVoltage <= BATTERY_LOW_VOLTAGE;
 }
 
 bool isBatteryCharging() {
-    BATTERY_DATA bd = getInaData();    
     return bd.shuntVoltage <= 0.0;
 }
 
 bool isBatteryCharged() {
-    BATTERY_DATA bd = getInaData();
     return bd.shuntVoltage >= -7.0 && bd.current >= -50.0 && bd.power <= 220.0;
 }
 
 void updateBatteryDataList() {
     BATTERY_DATA bd = getInaData();
+    Serial.print("Bus Voltage: ");
+    Serial.println(bd.busVoltage);
     // debugger.log(String(bd.busVoltage).c_str());
     batteryDataList[bdIndex] = bd;
     bdIndex = (bdIndex + 1) % BATTERY_BUFFER_SIZE;
@@ -176,7 +177,7 @@ void getLastDataFromKRVKWeather(FRAME_DATA fd) {
                 // debugger.log(payload.c_str());
 
                 // Procesar la respuesta JSON
-                processData(payload.c_str());
+                processData(payload.c_str(), fd);
                 success = true; // La solicitud fue exitosa
             } else {
                 String error = "HTTP request failed with error code: " + String(httpResponseCode);
@@ -202,8 +203,7 @@ void getLastDataFromKRVKWeather(FRAME_DATA fd) {
     }
 }
 
-BATTERY_DATA getBatteryData() {
-    BATTERY_DATA bd;
+void calculateBatteryData() {
     if(bdCount > 0) {
         float avgVBus = 0.0f, avgVShunt = 0.0f, avgCurrent = 0.0f, avgPower = 0.0f;
         for(int i=0; i<bdCount; i++) {
@@ -225,8 +225,8 @@ BATTERY_DATA getBatteryData() {
     else {
         bd = getInaData();
     }
-
-    return bd;
+    Serial.println("Battery Data:");
+    Serial.println(bd.busVoltage);
 }
 
 FRAME_DATA getFrameData(bool initialRead) {
@@ -237,8 +237,6 @@ FRAME_DATA getFrameData(bool initialRead) {
         frameData.wifiStrength = 0;
     else
         frameData.wifiStrength = WiFi.RSSI();
-
-    BATTERY_DATA bd = getInaData();
     
     String inaData = String(bd.busVoltage)+";"+String(bd.shuntVoltage)+";"+String(bd.current)+";"+String(bd.power);
     debugger.log(String(inaData).c_str());
@@ -261,11 +259,10 @@ int calculateSOC(float V) {
     if (V <= BATTERY_CRITICAL_VOLTAGE) return 0.0;
     if (V >= BATTERY_FULL_VOLTAGE) return 100.0;
 
-    float k = 4.0;  // Ajuste basado en la curva de descarga
     return (int)(100.0 * (1 - exp(-k * (V - BATTERY_CRITICAL_VOLTAGE) / (BATTERY_FULL_VOLTAGE - BATTERY_CRITICAL_VOLTAGE))));
 }
 
-void processData(const char* data) {
+void processData(const char* data, FRAME_DATA fd) {
     JsonDocument doc; 
     DeserializationError error = deserializeJson(doc, data);
     if (error) {
@@ -274,7 +271,6 @@ void processData(const char* data) {
         return;
     }
 
-    FRAME_DATA fd = getFrameData();
     float temp = doc["last_record"]["temperature"]; // 20.1
     float hum = doc["last_record"]["humidity"]; // 55.3
     float press = doc["last_record"]["pressure"]; // 1005.58
@@ -348,6 +344,7 @@ void startDeepSleep(bool lowBatteryDeepSleep = false) {
 }
 
 void setup() {
+    Serial.begin(115200);
     bool lowBattery = false;
     /* ESP32-C3 Configuration */
     esp_task_wdt_init(10, true); // Timeout de 10 segundos para evitar que se quede colgado
@@ -380,8 +377,7 @@ void setup() {
     batteryTicker.attach(0.2, updateBatteryDataList);    
     delay(1000);    
     batteryTicker.detach();
-    BATTERY_DATA bd = getBatteryData();
-    // FRAME_DATA fd = getFrameData(true);    
+    calculateBatteryData();
     if(bd.shuntVoltage <= 0.0) {
         statusLED.setLEDColor(statusLED.getLEDOnColor());    
     }
@@ -440,7 +436,7 @@ void setup() {
     wakeUpResetManager.logResetReason();
     wakeUpResetManager.printWakeupReason(resetByButton);
     debugger.log("KRVKWeather Frame iniciado");
-    debugger.log(String(lowBatteryAttempts).c_str());    
+    // debugger.log(String(lowBatteryAttempts).c_str());    
 
     delay(100);
     FRAME_DATA fd = getFrameData();    
@@ -460,7 +456,7 @@ void processExampleData() {
     String jsonStr = file.readString();
     file.close();
     FRAME_DATA fd = getFrameData();
-    processData(jsonStr.c_str());
+    processData(jsonStr.c_str(), fd);
 }
 
 /* BUTTON */

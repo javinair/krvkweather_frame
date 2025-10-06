@@ -1,0 +1,38 @@
+{
+    "extra_data": {
+      "last_rain_days": 0
+    },
+    "last_record": {
+      "battery_level": 3.94,
+      "device_power": 0,
+      "humidity": 50.5,
+      "id": 6926,
+      "pressure": 1006.3,
+      "rain_last_hour": 0.273,
+      "rain_today": 7.098,
+      "solar_voltage": 0.17,
+      "temperature": 10.3,
+      "timestamp": "2025-03-05 20:00:04",
+      "uv_index": 0,
+      "wind_direction": "east",
+      "wind_gust": 8,
+      "wind_speed": 2
+    },
+    "today_extremes": {
+      "humidity": {
+        "max": 100,
+        "min": 61.1
+      },
+      "pressure": {
+        "max": 1007.17,
+        "min": 1004.9
+      },
+      "temperature": {
+        "max": 17.2,
+        "min": 14
+      },
+      "wind_speed": {
+        "max": 26
+      }
+    }
+  }
