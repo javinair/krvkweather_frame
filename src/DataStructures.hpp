@@ -6,6 +6,10 @@ struct BATTERY_DATA {
     float shuntVoltage;
     float current;
     float power;
+    // float maxBusVoltage;
+    // float minBusVoltage;
+    // float maxCurrent;
+    // float minCurrent;
 };
 
 struct FRAME_DATA {

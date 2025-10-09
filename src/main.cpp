@@ -25,20 +25,20 @@
 #include "SPIFFS.h"
 
 /************** DeepSleep **************/
-#define NORMAL_SLEEP_TIME_IN_MINUTES 2       // 10 min
+#define NORMAL_SLEEP_TIME_IN_MINUTES 1      // 10 min
 #define EXTENDED_SLEEP_TIME_IN_MINUTES 5    // 30 min si batería baja
-#define MAX_SLEEP_TIME_IN_MINUTES 10         // 2 horas si batería críticamente baja
-#define MAX_LOW_BATTERY_ATTEMPTS 3  // Después de 3 intentos, extender aún más
+#define MAX_SLEEP_TIME_IN_MINUTES 10        // 2 horas si batería críticamente baja
+#define MAX_LOW_BATTERY_ATTEMPTS 3          // Después de 3 intentos, extender aún más
 
 /************** Internal battery SoC **************/
-#define BATTERY_FULL_VOLTAGE 4.2    // 100%
+#define BATTERY_FULL_VOLTAGE 4.0    // 100%
 #define BATTERY_LOW_VOLTAGE 3.5     // 0%
-#define BATTERY_CRITICAL_VOLTAGE 3.2
+#define BATTERY_CRITICAL_VOLTAGE 3.3
 #define BATTERY_BUFFER_SIZE 20
 BATTERY_DATA batteryDataList[BATTERY_BUFFER_SIZE];
 BATTERY_DATA bd;
-const float k = 3.0;      // Constant
-Ticker batteryTicker;   // Ticker to update battery data
+const float k = 3.0;    // Constante para el cálculo del SoC
+Ticker batteryTicker;
 int bdIndex = 0;
 int bdCount = 0;
 RTC_DATA_ATTR int lowBatteryAttempts = 0;  // Variable que persiste en deep sleep
@@ -61,6 +61,7 @@ unsigned long btnPressedTime  = 0;
 unsigned long btnReleasedTime = 0;
 
 /************** NTP **************/
+const char* tzSpain = "CET-1CEST,M3.5.0,M10.5.0/3";
 const char* ntpServer = "pool.ntp.org";
 const long gmtOffset_sec = 3600; // GMT Madrid offset (GMT+1)
 const int daylightOffset_sec = 3600; // Summer time offset (1 hora)
@@ -83,7 +84,6 @@ ScreenManager screen(display, debugger);
 WakeUpResetManager wakeUpResetManager(debugger);
 
 /****************************** Methods *******************************/
-void calculateBatteryStatus();
 void processData(const char* data, FRAME_DATA fd);
 FRAME_DATA getFrameData(bool initialRead = false);
 BATTERY_DATA getInaData();
@@ -97,10 +97,6 @@ bool isBatteryCharged();
 void syncTimeAndCalculateWakeup(void* parameter);
 void processExampleData();
 void calculateBatteryData();
-
-void calculateBatteryStatus() {
-
-}
 
 bool isLowBattery() {
     return bd.busVoltage <= BATTERY_LOW_VOLTAGE;
@@ -116,9 +112,6 @@ bool isBatteryCharged() {
 
 void updateBatteryDataList() {
     BATTERY_DATA bd = getInaData();
-    Serial.print("Bus Voltage: ");
-    Serial.println(bd.busVoltage);
-    // debugger.log(String(bd.busVoltage).c_str());
     batteryDataList[bdIndex] = bd;
     bdIndex = (bdIndex + 1) % BATTERY_BUFFER_SIZE;
     if(bdCount < BATTERY_BUFFER_SIZE) {
@@ -126,33 +119,12 @@ void updateBatteryDataList() {
     }
 }
 
-String httpGETRequest(const char* serverName) {
-    WiFiClient client;
-    HTTPClient http;
-      
-    http.begin(client, serverName);
-    
-    // Send HTTP POST request
-    int httpResponseCode = http.GET();
-    
-    String payload = "{}"; 
-    
-    if (httpResponseCode>0) {
-      payload = http.getString();
-    }
-    // Free resources
-    http.end();
-  
-    return payload;
-}
-
-
 void getLastDataFromKRVKWeather(FRAME_DATA fd) {
 
     char url[100];
     snprintf(url, sizeof(url), "http://%s:%d/get_frame_data", KRVKWEAHTER_IP, KRVKWEAHTER_PORT);
     const int maxRetries = 5;
-    const int retryInterval = 2000; // 2 segundos
+    const int retryInterval = 2000;
     int attempt = 0;
     bool success = false;
 
@@ -174,14 +146,12 @@ void getLastDataFromKRVKWeather(FRAME_DATA fd) {
                     }
                 }
                 debugger.log("MQTT recibido");
-                // debugger.log(payload.c_str());
 
                 // Procesar la respuesta JSON
                 processData(payload.c_str(), fd);
-                success = true; // La solicitud fue exitosa
+                success = true;
             } else {
-                String error = "HTTP request failed with error code: " + String(httpResponseCode);
-                debugger.log(error.c_str());
+                debugger.log(String("Error de conexión con KRVKWeather").c_str());
             }
 
             http.end();
@@ -199,18 +169,26 @@ void getLastDataFromKRVKWeather(FRAME_DATA fd) {
     }
 
     if (!success) {
-        debugger.log("No se pudo obtener datos de KRVKWeather después de 5 intentos.");
+        char buffer[100];
+        snprintf(buffer, sizeof(buffer), "No se pudo obtener datos de KRVKWeather después de %d intentos.", maxRetries);
+        debugger.log(buffer);
     }
 }
 
 void calculateBatteryData() {
     if(bdCount > 0) {
         float avgVBus = 0.0f, avgVShunt = 0.0f, avgCurrent = 0.0f, avgPower = 0.0f;
+        float maxVBus = -1000.0f, minVBus = 1000.0f;
+        float maxCurrent = -1000.0f, minCurrent = 1000.0f;
         for(int i=0; i<bdCount; i++) {
             avgVBus += batteryDataList[i].busVoltage;
             avgVShunt += batteryDataList[i].shuntVoltage;
             avgCurrent += batteryDataList[i].current;
             avgPower += batteryDataList[i].power;
+            // if(batteryDataList[i].busVoltage > maxVBus) maxVBus = batteryDataList[i].busVoltage;
+            // if(batteryDataList[i].busVoltage < minVBus) minVBus = batteryDataList[i].busVoltage;
+            // if(batteryDataList[i].current > maxCurrent) maxCurrent = batteryDataList[i].current;
+            // if(batteryDataList[i].current < minCurrent) minCurrent = batteryDataList[i].current;
         }
         avgVBus /= bdCount;
         avgVShunt /= bdCount;
@@ -225,8 +203,6 @@ void calculateBatteryData() {
     else {
         bd = getInaData();
     }
-    Serial.println("Battery Data:");
-    Serial.println(bd.busVoltage);
 }
 
 FRAME_DATA getFrameData(bool initialRead) {
@@ -238,7 +214,7 @@ FRAME_DATA getFrameData(bool initialRead) {
     else
         frameData.wifiStrength = WiFi.RSSI();
     
-    String inaData = String(bd.busVoltage)+";"+String(bd.shuntVoltage)+";"+String(bd.current)+";"+String(bd.power);
+    String inaData = String(bd.busVoltage)+";"+String(bd.shuntVoltage)+";"+String(bd.current)+";"+String(bd.power)+";"+String(frameData.wifiStrength);
     debugger.log(String(inaData).c_str());
 
     frameData.bd = bd;
@@ -258,7 +234,6 @@ BATTERY_DATA getInaData() {
 int calculateSOC(float V) {
     if (V <= BATTERY_CRITICAL_VOLTAGE) return 0.0;
     if (V >= BATTERY_FULL_VOLTAGE) return 100.0;
-
     return (int)(100.0 * (1 - exp(-k * (V - BATTERY_CRITICAL_VOLTAGE) / (BATTERY_FULL_VOLTAGE - BATTERY_CRITICAL_VOLTAGE))));
 }
 
@@ -320,10 +295,10 @@ void otaConfiguration() {
 
 void startDeepSleep(bool lowBatteryDeepSleep = false) {
     debugger.log("Entrando en modo deep sleep...");   
+    delay(200);    
     if(!lowBatteryDeepSleep) { 
         WiFi.disconnect(true);    
         screen.hibernate();    
-        delay(200);
 
         if(isBatteryCharging()) {
             if(isBatteryCharged())
@@ -344,10 +319,12 @@ void startDeepSleep(bool lowBatteryDeepSleep = false) {
 }
 
 void setup() {
-    Serial.begin(115200);
+    setCpuFrequencyMhz(80); // Cambia la frecuencia de la CPU a 80 MHz
     bool lowBattery = false;
     /* ESP32-C3 Configuration */
-    esp_task_wdt_init(10, true); // Timeout de 10 segundos para evitar que se quede colgado
+    // esp_task_wdt_init(20, true); // Timeout de 10 segundos para evitar que se quede colgado
+    // esp_task_wdt_add(NULL);      // Añade la tarea principal (loop) al WDT
+
 
     /* BUTTON */
     pinMode(GPIO_BUTTON, INPUT_PULLUP);
@@ -364,8 +341,6 @@ void setup() {
         while (1); // Detiene el programa si no se encuentra el sensor
     }    
     INA0.setMaxCurrentShunt(0.2, 0.1, true);
-    // INA0.setAverage(INA226_16_SAMPLES);  
-
 
     // uint32_t brown_reg_temp = 
     // READ_PERI_REG(RTC_CNTL_BROWN_OUT_REG); //save WatchDog register
@@ -384,11 +359,11 @@ void setup() {
     else {
         if(bd.busVoltage <= BATTERY_LOW_VOLTAGE) {
             lowBatteryAttempts++;
-            int sleepTime = NORMAL_SLEEP_TIME_IN_MINUTES; // Default a 10 min
+            int sleepTime = NORMAL_SLEEP_TIME_IN_MINUTES;
             if (lowBatteryAttempts >= MAX_LOW_BATTERY_ATTEMPTS) {
-                sleepTime = MAX_SLEEP_TIME_IN_MINUTES; // Prolongamos más el deep sleep
+                sleepTime = MAX_SLEEP_TIME_IN_MINUTES;
             } else {
-                sleepTime = EXTENDED_SLEEP_TIME_IN_MINUTES; // Espera más tiempo
+                sleepTime = EXTENDED_SLEEP_TIME_IN_MINUTES; 
             }   
             statusLED.setLEDColor(statusLED.getLEDLowBatteryColor());    
             secondsToWakeUp = sleepTime * 60;
@@ -402,19 +377,24 @@ void setup() {
     }
 
     /* WIFI */
-    WiFi.mode(WIFI_MODE_STA); // turn on WiFi
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(1000);
+    WiFi.setTxPower(WIFI_POWER_2dBm);    
+    WiFi.persistent(true);
+    WiFi.setAutoReconnect(true);
+    WiFi.mode(WIFI_MODE_STA);
+
+    if (WiFi.status() != WL_CONNECTED) {
+        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+        while (WiFi.status() != WL_CONNECTED) {
+            delay(1000);
+        }
     }
-    WiFi.setTxPower(WIFI_POWER_2dBm);   
+
+    statusLED.setLEDColor(statusLED.getLEDOnChargedColor());   
+    delay(100); 
+    statusLED.setLEDOff();   
 
     /* DEBUG */
     debugger.init();
-
-
-
-    xTaskCreate(syncTimeAndCalculateWakeup, "SyncTimeTask", 4096, NULL, 1, NULL);    
 
     /* FileSystem */
     if(!SPIFFS.begin(true)) {
@@ -422,23 +402,20 @@ void setup() {
         return;
     }
         
-
     /* OTA */
     otaConfiguration();        
 
     /* EINK */
     screen.init();
 
-
-    // WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, brown_reg_temp); //enable brownout detector    
-
     /* INITIAL LOG */
+    debugger.log(String("KRVKWeather Frame iniciado [" + String(lowBatteryAttempts) + "]").c_str());
     wakeUpResetManager.logResetReason();
     wakeUpResetManager.printWakeupReason(resetByButton);
-    debugger.log("KRVKWeather Frame iniciado");
-    // debugger.log(String(lowBatteryAttempts).c_str());    
 
-    delay(100);
+    xTaskCreate(syncTimeAndCalculateWakeup, "SyncTimeTask", 4096, NULL, 1, NULL);        
+
+    delay(200);
     FRAME_DATA fd = getFrameData();    
     getLastDataFromKRVKWeather(fd);   
     if(!resetByButton)
@@ -482,7 +459,7 @@ int calculateNextWakeup(int timeInMinutes) {
     // a que KRVKWeather procese y actualice los datos en su BD
 
     // Configuración del servidor NTP
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    configTzTime(tzSpain, ntpServer);
 
     // Espera a que se sincronice el tiempo
     struct tm timeinfo;
@@ -502,14 +479,24 @@ int calculateNextWakeup(int timeInMinutes) {
     nextTime.tm_min = ((currentTime.tm_min / timeInMinutes) + 1) * timeInMinutes;
     nextTime.tm_sec = 0;
 
+    // // Ajusta para que comience a partir del minuto 1 en lugar del minuto 0
+    // if (nextTime.tm_min % timeInMinutes == 0) {
+    //     nextTime.tm_min += 1;
+    // }
+
+    // // Si los minutos son 60, incrementa la hora y ajusta los minutos a 1
+    // if (nextTime.tm_min >= 60) {
+    //     nextTime.tm_min = 1;
+    //     nextTime.tm_hour++;
+    // }
     // Ajusta para que comience a partir del minuto 1 en lugar del minuto 0
     if (nextTime.tm_min % timeInMinutes == 0) {
-        nextTime.tm_min += 1;
+        nextTime.tm_min += 0;
     }
 
     // Si los minutos son 60, incrementa la hora y ajusta los minutos a 1
     if (nextTime.tm_min >= 60) {
-        nextTime.tm_min = 1;
+        nextTime.tm_min = 0;
         nextTime.tm_hour++;
     }
 
@@ -522,10 +509,10 @@ int calculateNextWakeup(int timeInMinutes) {
     // Muestra ambos timestamps y ambas horas en formato hh:mm:ss
     char currentTimeStr[20];
     strftime(currentTimeStr, sizeof(currentTimeStr), "%H:%M:%S", &currentTime);
-    debugger.log(currentTimeStr);
+    // debugger.log(currentTimeStr);
     char nextTimeStr[20];
     strftime(nextTimeStr, sizeof(nextTimeStr), "%H:%M:%S", &nextTime);
-    debugger.log(nextTimeStr);    
+    debugger.log((String("Próximo inicio: ") + String(nextTimeStr)).c_str());    
     return differenceInSeconds;
 }
 
@@ -536,17 +523,15 @@ void loop() {
     static unsigned long lastOTACheck = 0;    
     if (currentMillis - lastOTACheck >= OTA_UPDATE_MS) {
         lastOTACheck = currentMillis;
-        ArduinoOTA.handle(); // Permite las actualizaciones OTA
+        ArduinoOTA.handle();
     }    
 
     /* BUTTON */
     btnCurrentState = digitalRead(GPIO_BUTTON);
     if (btnLastState == HIGH && btnCurrentState == LOW) {
-        // Button pressed, record time
         btnPressedTime = millis();
     } 
     else if (btnLastState == LOW && btnCurrentState == HIGH) {
-        // Button released, calculate press duration
         btnReleasedTime = millis();
         long pressDuration = btnReleasedTime - btnPressedTime;
 
@@ -561,6 +546,5 @@ void loop() {
         }
     }  
 
-    // Update last button state
     btnLastState = btnCurrentState;
 }
