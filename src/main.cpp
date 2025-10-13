@@ -32,8 +32,8 @@
 
 /************** Internal battery SoC **************/
 #define BATTERY_FULL_VOLTAGE 4.0    // 100%
-#define BATTERY_LOW_VOLTAGE 3.5     // 0%
-#define BATTERY_CRITICAL_VOLTAGE 3.3
+#define BATTERY_LOW_VOLTAGE 3.6     // 0%
+#define BATTERY_CRITICAL_VOLTAGE 3.5
 #define BATTERY_BUFFER_SIZE 20
 BATTERY_DATA batteryDataList[BATTERY_BUFFER_SIZE];
 BATTERY_DATA bd;
@@ -90,6 +90,7 @@ BATTERY_DATA getInaData();
 int calculateNextWakeup(int timeInMinutes = NORMAL_SLEEP_TIME_IN_MINUTES);
 void getLastDataFromKRVKWeather(FRAME_DATA fd);
 int calculateSOC(float voltage);
+int calcularSOCKRVKWeather(float voltage);
 void updateBatteryDataList();
 bool isLowBattery();
 bool isBatteryCharging();
@@ -237,6 +238,17 @@ int calculateSOC(float V) {
     return (int)(100.0 * (1 - exp(-k * (V - BATTERY_CRITICAL_VOLTAGE) / (BATTERY_FULL_VOLTAGE - BATTERY_CRITICAL_VOLTAGE))));
 }
 
+int calcularSOCKRVKWeather(float voltage) {
+    float porcentaje = ((voltage - 3.2) / (4.21 - 3.2)) * 100.0;
+    
+    // Limitar el resultado entre 0 y 100
+    if (porcentaje < 0) porcentaje = 0;
+    if (porcentaje > 100) porcentaje = 100;
+    
+    return static_cast<int>(porcentaje + 0.5); // redondear al entero más cercano
+}
+
+
 void processData(const char* data, FRAME_DATA fd) {
     JsonDocument doc; 
     DeserializationError error = deserializeJson(doc, data);
@@ -256,7 +268,7 @@ void processData(const char* data, FRAME_DATA fd) {
     float rain_last_hour = doc["last_record"]["rain_last_hour"]; // 0
     float rain_today = doc["last_record"]["rain_today"]; // 0
     int wifi = doc["last_record"]["wifi"]; // -52
-    int batPercentage = calculateSOC(doc["last_record"]["battery_level"]);
+    int batPercentage = calcularSOCKRVKWeather(doc["last_record"]["battery_level"]);
     const char* timestamp = doc["last_record"]["timestamp"]; // "north"    
     float solar_voltage = doc["last_record"]["solar_voltage"]; // 0    
     int maxTempExt = doc["today_extremes"]["temperature"]["max"]; // 20.6
@@ -293,13 +305,11 @@ void otaConfiguration() {
     // debugger.log("Disponible para OTA");
 }
 
-void startDeepSleep(bool lowBatteryDeepSleep = false) {
+void startDeepSleep() {
     debugger.log("Entrando en modo deep sleep...");   
     delay(200);    
-    if(!lowBatteryDeepSleep) { 
-        WiFi.disconnect(true);    
-        screen.hibernate();    
-
+    screen.hibernate();        
+    if(!isLowBattery()) { 
         if(isBatteryCharging()) {
             if(isBatteryCharged())
                 statusLED.setLEDColor(statusLED.getLEDChargedColor());
@@ -307,10 +317,15 @@ void startDeepSleep(bool lowBatteryDeepSleep = false) {
                 statusLED.setLEDColor(statusLED.getLEDChargingColor());
         } 
         else {
-            if(isLowBattery())
-                statusLED.setLEDColor(statusLED.getLEDLowBatteryColor());
-            else
-                statusLED.setLEDOff();
+            statusLED.setLEDOff();
+        }
+    }
+    else {
+        if(isBatteryCharging()) {
+                statusLED.setLEDColor(statusLED.getLEDChargingColor());
+        } 
+        else {
+            statusLED.setLEDColor(statusLED.getLEDLowBatteryColor());
         }
     }
         
@@ -353,28 +368,17 @@ void setup() {
     delay(1000);    
     batteryTicker.detach();
     calculateBatteryData();
-    if(bd.shuntVoltage <= 0.0) {
-        statusLED.setLEDColor(statusLED.getLEDOnColor());    
-    }
-    else {
-        if(bd.busVoltage <= BATTERY_LOW_VOLTAGE) {
-            lowBatteryAttempts++;
-            int sleepTime = NORMAL_SLEEP_TIME_IN_MINUTES;
-            if (lowBatteryAttempts >= MAX_LOW_BATTERY_ATTEMPTS) {
-                sleepTime = MAX_SLEEP_TIME_IN_MINUTES;
-            } else {
-                sleepTime = EXTENDED_SLEEP_TIME_IN_MINUTES; 
-            }   
-            statusLED.setLEDColor(statusLED.getLEDLowBatteryColor());    
-            secondsToWakeUp = sleepTime * 60;
-            wakeUpResetManager.enableTimerWakeUp(secondsToWakeUp);
-            esp_deep_sleep_start();
-        }
-        else {
+    statusLED.setLEDColor(statusLED.getLEDOnColor());        
+    if (bd.shuntVoltage <= 0.0) {   // Cargando
+        if(lowBatteryAttempts > 0)
             lowBatteryAttempts = 0;
-            statusLED.setLEDColor(statusLED.getLEDOnColor());    
-        }
+    } else if (bd.busVoltage <= BATTERY_LOW_VOLTAGE) {
+        lowBatteryAttempts++;
+    } else {
+        if(lowBatteryAttempts > 0)
+            lowBatteryAttempts = 0;
     }
+
 
     /* WIFI */
     WiFi.setTxPower(WIFI_POWER_2dBm);    
@@ -409,7 +413,13 @@ void setup() {
     screen.init();
 
     /* INITIAL LOG */
-    debugger.log(String("KRVKWeather Frame iniciado [" + String(lowBatteryAttempts) + "]").c_str());
+    if(!isLowBattery()) {
+        debugger.log(String("KRVKWeather Frame iniciado [" + String(lowBatteryAttempts) + "]").c_str());
+    } else {
+        debugger.log(String("KRVKWeather Frame iniciado [" + String(lowBatteryAttempts) + "] LOW_BATTERY!!").c_str());
+    }
+    delay(300);
+    
     wakeUpResetManager.logResetReason();
     wakeUpResetManager.printWakeupReason(resetByButton);
 
@@ -474,13 +484,21 @@ int calculateNextWakeup(int timeInMinutes) {
     time(&now);
     localtime_r(&now, &currentTime);
 
+    int _timeInMinutes = timeInMinutes;
+    if(isLowBattery()) {
+        _timeInMinutes = EXTENDED_SLEEP_TIME_IN_MINUTES;
+        if (lowBatteryAttempts >= MAX_LOW_BATTERY_ATTEMPTS) {
+            _timeInMinutes = MAX_SLEEP_TIME_IN_MINUTES;
+        }          
+    }
+
     // Calcula el timestamp de la siguiente hora del día en la que los minutos sean múltiplos de "timeInMinutes"
     struct tm nextTime = currentTime;
-    nextTime.tm_min = ((currentTime.tm_min / timeInMinutes) + 1) * timeInMinutes;
+    nextTime.tm_min = ((currentTime.tm_min / _timeInMinutes) + 1) * _timeInMinutes;
     nextTime.tm_sec = 0;
 
     // // Ajusta para que comience a partir del minuto 1 en lugar del minuto 0
-    // if (nextTime.tm_min % timeInMinutes == 0) {
+    // if (nextTime.tm_min % _timeInMinutes == 0) {
     //     nextTime.tm_min += 1;
     // }
 
@@ -490,7 +508,7 @@ int calculateNextWakeup(int timeInMinutes) {
     //     nextTime.tm_hour++;
     // }
     // Ajusta para que comience a partir del minuto 1 en lugar del minuto 0
-    if (nextTime.tm_min % timeInMinutes == 0) {
+    if (nextTime.tm_min % _timeInMinutes == 0) {
         nextTime.tm_min += 0;
     }
 
